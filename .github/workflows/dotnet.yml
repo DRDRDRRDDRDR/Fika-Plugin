@@ -11,31 +11,48 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     env:
-      DOTNET_NOLOGO: true
-      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      DOTNET_NOLOGO: false
+      DOTNET_CLI_TELEMETRY_OPTOUT: false
+      SolutionName: Fika.Core                            
+      CSProj: Source/Fika.Core.csproj             
 
     steps:
-    - name: Setup dotnet
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '8.0.x'
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
-    - name: Install dependencies
-      run: dotnet restore --configfile Nuget.config
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: 6.0.x
 
-    - name: Build
-      run: dotnet build --nologo --no-restore --configuration Debug
+      # Restore all projects
+      - name: dotnet Restore
+        run: dotnet restore
 
-    - name: Zip remaining files
-      run: |
-        Compress-Archive -Path ${{ env.SolutionName }}-${{ matrix.configuration }} -DestinationPath ${{ env.SolutionName }}-${{ matrix.configuration }}.zip
-      # Upload artifact with github commit SHA
-    - name: Upload artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: ${{ env.SolutionName }}-${{ matrix.configuration }}-${{ github.sha }}
-        path: ${{ env.SolutionName }}-${{ matrix.configuration }}\
-        if-no-files-found: error
+      # Build the project
+      - name: dotnet Publish
+        run: |
+          mkdir ${{ env.SolutionName }}-${{ matrix.configuration }}
+          dotnet build ${{ env.CSProj }} -c ${{ matrix.configuration }} -o ${{ env.SolutionName }}-${{ matrix.configuration }}
+
+      - name: Remove unnecessary files
+        run: |
+          rm ${{ env.SolutionName }}-${{ matrix.configuration }}/StayInTarkov.pdb
+
+      # Zip remaining files
+      - name: Zip remaining files
+        run: |
+          zip -r ${{ env.SolutionName }}-${{ matrix.configuration }}.zip ${{ env.SolutionName }}-${{ matrix.configuration }}
+
+      # Upload artifact with GitHub commit SHA
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.SolutionName }}-${{ matrix.configuration }}-${{ github.sha }}
+          path: ${{ env.SolutionName }}-${{ matrix.configuration }}/
+          if-no-files-found: error
