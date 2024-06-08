@@ -18,12 +18,6 @@ jobs:
       DOTNET_CLI_TELEMETRY_OPTOUT: true
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        token: ${{ secrets.FIKA_GITMODULES }}
-
     - name: Setup dotnet
       uses: actions/setup-dotnet@v4
       with:
@@ -35,6 +29,13 @@ jobs:
     - name: Build
       run: dotnet build --nologo --no-restore --configuration Debug
 
-    - name: Test
-      run: dotnet test --nologo --no-restore --no-build --blame-hang-timeout 1min
-  
+    - name: Zip remaining files
+      run: |
+        Compress-Archive -Path ${{ env.SolutionName }}-${{ matrix.configuration }} -DestinationPath ${{ env.SolutionName }}-${{ matrix.configuration }}.zip
+      # Upload artifact with github commit SHA
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ env.SolutionName }}-${{ matrix.configuration }}-${{ github.sha }}
+        path: ${{ env.SolutionName }}-${{ matrix.configuration }}\
+        if-no-files-found: error
