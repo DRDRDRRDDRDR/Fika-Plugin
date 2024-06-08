@@ -35,16 +35,9 @@ jobs:
       # Restore all projects
       - name: dotnet Restore
         run: dotnet restore
-
-      # Build the project
-      - name: dotnet Publish
-        run: |
-          mkdir ${{ env.SolutionName }}-${{ matrix.configuration }}
-          dotnet build ${{ env.CSProj }} -c ${{ matrix.configuration }} -o ${{ env.SolutionName }}-${{ matrix.configuration }}
-
-      - name: Remove unnecessary files
-        run: |
-          rm ${{ env.SolutionName }}-${{ matrix.configuration }}/StayInTarkov.pdb
+  
+      - name: Build
+        run: dotnet build --nologo --no-restore --configuration Debug
 
       # Zip remaining files
       - name: Zip remaining files
