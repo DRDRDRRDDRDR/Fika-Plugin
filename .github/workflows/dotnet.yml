@@ -36,8 +36,10 @@ jobs:
       - name: dotnet Restore
         run: dotnet restore
   
-      - name: Build
-        run: dotnet build --nologo --no-restore --configuration Debug
+      - name: dotnet Publish
+        run: |
+          mkdir ${{ env.SolutionName }}-${{ matrix.configuration }}
+          dotnet build ${{ env.CSProj }} -c ${{ matrix.configuration }} -o ${{ env.SolutionName }}-${{ matrix.configuration }}
 
       - name: Zip remaining files
         run: |
