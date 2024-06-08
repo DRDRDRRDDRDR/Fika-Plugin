@@ -4,7 +4,14 @@ using EFT.CameraControl;
 using EFT.UI;
 using Fika.Core.Coop.Components;
 using Fika.Core.Coop.GameMode;
+using Fika.Core.Coop.Players;
 using Fika.Core.UI;
+using HarmonyLib;
+using Koenigz.PerfectCulling;
+using Koenigz.PerfectCulling.EFT;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
 using TMPro;
 using UnityEngine;
 
@@ -26,7 +33,8 @@ namespace Fika.Core.Coop.FreeCamera
         private bool _effectsCleared = false;
 
         private GamePlayerOwner _gamePlayerOwner;
-        private Player _player => Singleton<GameWorld>.Instance.MainPlayer;
+        private CoopPlayer _player => (CoopPlayer)Singleton<GameWorld>.Instance.MainPlayer;
+        private CoopHandler coopHandler;
 
         public GameObject CameraParent;
         public Camera CameraFreeCamera { get; private set; }
@@ -36,13 +44,13 @@ namespace Fika.Core.Coop.FreeCamera
         private bool extracted = false;
         private DeathFade deathFade;
         private bool deathFadeEnabled;
-        private float DeadTime = 0f;
         private DisablerCullingObjectBase[] allCullingObjects;
+        private List<PerfectCullingBakeGroup> previouslyActiveBakeGroups;
 
         protected void Awake()
         {
             CameraParent = new GameObject("CameraParent");
-            var FCamera = CameraParent.GetOrAddComponent<Camera>();
+            Camera FCamera = CameraParent.GetOrAddComponent<Camera>();
             FCamera.enabled = false;
         }
 
@@ -73,6 +81,27 @@ namespace Fika.Core.Coop.FreeCamera
             deathFade.enabled = true;
 
             allCullingObjects = FindObjectsOfType<DisablerCullingObjectBase>();
+            previouslyActiveBakeGroups = [];
+
+            _player.ActiveHealthController.DiedEvent += MainPlayer_DiedEvent;
+
+            if (CoopHandler.TryGetCoopHandler(out CoopHandler cHandler))
+            {
+                coopHandler = cHandler;
+            }
+        }
+
+        private void MainPlayer_DiedEvent(EDamageType obj)
+        {
+            _player.ActiveHealthController.DiedEvent -= MainPlayer_DiedEvent;
+
+            if (!deathFadeEnabled)
+            {
+                deathFade.EnableEffect();
+                deathFadeEnabled = true;
+            }
+
+            StartCoroutine(DeathRoutine());
         }
 
         protected void Update()
@@ -88,17 +117,6 @@ namespace Fika.Core.Coop.FreeCamera
             }
 
             if (_player.PlayerHealthController == null)
-            {
-                return;
-            }
-
-            if (!CoopHandler.TryGetCoopHandler(out CoopHandler coopHandler))
-            {
-                return;
-            }
-
-            CoopGame coopGame = (CoopGame)coopHandler.LocalGameInstance;
-            if (coopGame == null)
             {
                 return;
             }
@@ -127,7 +145,8 @@ namespace Fika.Core.Coop.FreeCamera
 
             if (quitState == CoopHandler.EQuitState.YouHaveExtracted && !extracted)
             {
-                if (coopGame.ExtractedPlayers.Contains(_player.ProfileId))
+                CoopGame coopGame = (CoopGame)coopHandler.LocalGameInstance;
+                if (coopGame.ExtractedPlayers.Contains((_player).NetId))
                 {
                     extracted = true;
                     ShowExtractMessage();
@@ -154,56 +173,50 @@ namespace Fika.Core.Coop.FreeCamera
                     _effectsCleared = true;
                 }
             }
+        }
 
-            if (!_player.HealthController.IsAlive)
+        private IEnumerator DeathRoutine()
+        {
+            yield return new WaitForSeconds(5);
+
+            CameraClass cameraClassInstance = CameraClass.Instance;
+            if (cameraClassInstance == null)
             {
-                DeadTime += Time.deltaTime;
-                if (!deathFadeEnabled)
-                {
-                    deathFade.EnableEffect();
-                    deathFadeEnabled = true;
-                }
+                yield break;
             }
 
-            // Player is dead. Remove all effects!
-            if (!_player.HealthController.IsAlive && !_freeCamScript.IsActive && DeadTime > 5f)
+            if (cameraClassInstance.EffectsController == null)
             {
-                CameraClass cameraClassInstance = CameraClass.Instance;
-                if (cameraClassInstance == null)
-                {
-                    return;
-                }
+                yield break;
+            }
 
-                if (cameraClassInstance.EffectsController == null)
-                {
-                    return;
-                }
+            if (cameraClassInstance.Camera != null)
+            {
+                cameraClassInstance.Camera.fieldOfView = Singleton<SharedGameSettingsClass>.Instance.Game.Settings.FieldOfView;
+            }
 
-                if (cameraClassInstance.Camera != null)
-                {
-                    cameraClassInstance.Camera.fieldOfView = Singleton<SharedGameSettingsClass>.Instance.Game.Settings.FieldOfView;
-                }
-
-                // Disable the DeathFade effect & Toggle the Camera
-                deathFade.DisableEffect();
+            // Disable the DeathFade effect & Toggle the Camera
+            deathFade.DisableEffect();
+            if (!_freeCamScript.IsActive)
+            {
                 ToggleCamera();
                 ToggleUi();
-                ShowExtractMessage();
+            }
+            ShowExtractMessage();
 
-                if (!_effectsCleared)
+            if (!_effectsCleared)
+            {
+                if (_player != null)
                 {
-                    if (_player != null)
-                    {
-                        _player.Muffled = false;
-                        _player.HeavyBreath = false;
-                    }
-
-                    if (CameraClass.Exist)
-                    {
-                        ClearEffects();
-                    }
-                    _effectsCleared = true;
+                    _player.Muffled = false;
+                    _player.HeavyBreath = false;
                 }
+
+                if (CameraClass.Exist)
+                {
+                    ClearEffects();
+                }
+                _effectsCleared = true;
             }
         }
 
@@ -211,7 +224,44 @@ namespace Fika.Core.Coop.FreeCamera
         {
             CameraClass cameraClass = CameraClass.Instance;
             cameraClass.EffectsController.method_4(false);
-            cameraClass.EffectsController.enabled = false;
+
+            Traverse effectsController = Traverse.Create(cameraClass.EffectsController);
+
+            BloodOnScreen bloodOnScreen = effectsController.Field("bloodOnScreen_0").GetValue<BloodOnScreen>();
+            if (bloodOnScreen != null)
+            {
+                Destroy(bloodOnScreen);
+            }
+
+            List<EffectsController.Class566> effectsManagerList = effectsController.Field("list_0").GetValue<List<EffectsController.Class566>>();
+            if (effectsManagerList != null)
+            {
+                foreach (EffectsController.Class566 effectsManager in effectsManagerList)
+                {
+                    while (effectsManager.ActiveEffects.Count > 0)
+                    {
+                        IEffect effect = effectsManager.ActiveEffects[0];
+                        effectsManager.DeleteEffect(effect);
+                    }
+                }
+                effectsManagerList.Clear();
+            }
+
+            CC_Wiggle wiggleEffect = cameraClass.Camera.gameObject.GetComponent<CC_Wiggle>();
+            if (wiggleEffect != null)
+            {
+                wiggleEffect.enabled = false;
+            }
+
+            CC_Blend[] blendEffects = cameraClass.Camera.gameObject.GetComponents<CC_Blend>();
+            if (blendEffects.Length > 0)
+            {
+                foreach (CC_Blend blendEffect in blendEffects)
+                {
+                    blendEffect.enabled = false;
+                }
+            }
+
             Destroy(cameraClass.EffectsController);
             cameraClass.VisorEffect.Clear();
             Destroy(cameraClass.VisorEffect);
@@ -225,7 +275,13 @@ namespace Fika.Core.Coop.FreeCamera
         {
             if (FikaPlugin.ShowExtractMessage.Value)
             {
-                extractText = FikaUIUtils.CreateOverlayText("Press 'F8' to extract");
+                string text = FikaPlugin.ExtractKey.Value.MainKey.ToString();
+                if (FikaPlugin.ExtractKey.Value.Modifiers.Count() > 0)
+                {
+                    string modifiers = string.Join(" + ", FikaPlugin.ExtractKey.Value.Modifiers);
+                    text = modifiers + " + " + text;
+                }
+                extractText = FikaUIUtils.CreateOverlayText($"Press '{text}' to extract");
             }
         }
 
@@ -318,6 +374,30 @@ namespace Fika.Core.Coop.FreeCamera
                 cullingObject.SetComponentsEnabled(true);
             }
             FikaPlugin.Instance.FikaLogger.LogDebug($"Enabled {count} Culling Triggers.");
+
+            PerfectCullingAdaptiveGrid perfectCullingAdaptiveGrid = FindObjectOfType<PerfectCullingAdaptiveGrid>();
+            if (perfectCullingAdaptiveGrid != null)
+            {
+                if (perfectCullingAdaptiveGrid.RuntimeGroupMapping.Count > 0)
+                {
+                    foreach (PerfectCullingCrossSceneGroup sceneGroup in perfectCullingAdaptiveGrid.RuntimeGroupMapping)
+                    {
+                        foreach (PerfectCullingBakeGroup bakeGroup in sceneGroup.bakeGroups)
+                        {
+                            if (!bakeGroup.IsEnabled)
+                            {
+                                bakeGroup.IsEnabled = true;
+                            }
+                            else
+                            {
+                                previouslyActiveBakeGroups.Add(bakeGroup);
+                            }
+                        }
+
+                        sceneGroup.enabled = false;
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -326,7 +406,6 @@ namespace Fika.Core.Coop.FreeCamera
         /// <param name="localPlayer"></param>
         private void SetPlayerToFirstPersonMode(Player localPlayer)
         {
-
             // re-enable _gamePlayerOwner
             _gamePlayerOwner.enabled = true;
             _freeCamScript.SetActive(false);
@@ -345,6 +424,32 @@ namespace Fika.Core.Coop.FreeCamera
                 cullingObject.SetComponentsEnabled(false);
             }
             FikaPlugin.Instance.FikaLogger.LogDebug($"Disabled {count} Culling Triggers.");
+
+            PerfectCullingAdaptiveGrid perfectCullingAdaptiveGrid = FindObjectOfType<PerfectCullingAdaptiveGrid>();
+            if (perfectCullingAdaptiveGrid != null)
+            {
+                if (perfectCullingAdaptiveGrid.RuntimeGroupMapping.Count > 0)
+                {
+                    foreach (PerfectCullingCrossSceneGroup sceneGroup in perfectCullingAdaptiveGrid.RuntimeGroupMapping)
+                    {
+                        sceneGroup.enabled = true;
+
+                        foreach (PerfectCullingBakeGroup bakeGroup in sceneGroup.bakeGroups)
+                        {
+                            if (bakeGroup.IsEnabled && !previouslyActiveBakeGroups.Contains(bakeGroup))
+                            {
+                                bakeGroup.IsEnabled = false;
+                            }
+                            else
+                            {
+                                previouslyActiveBakeGroups.Remove(bakeGroup);
+                            }
+                        }
+
+                        previouslyActiveBakeGroups.Clear();
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -354,7 +459,7 @@ namespace Fika.Core.Coop.FreeCamera
         private Player GetLocalPlayerFromWorld()
         {
             // If the GameWorld instance is null or has no RegisteredPlayers, it most likely means we're not in a raid
-            var gameWorld = Singleton<GameWorld>.Instance;
+            GameWorld gameWorld = Singleton<GameWorld>.Instance;
             if (gameWorld == null || gameWorld.MainPlayer == null)
             {
                 return null;
@@ -370,11 +475,11 @@ namespace Fika.Core.Coop.FreeCamera
 
             // Destroy FreeCamScript before FreeCamController if exists
             Destroy(_freeCamScript);
-            Destroy(this);
             if (extractText != null)
             {
                 Destroy(extractText);
             }
+            Destroy(this);
         }
     }
 }

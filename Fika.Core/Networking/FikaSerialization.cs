@@ -644,12 +644,14 @@ namespace Fika.Core.Networking
             public float Absorbed;
             public Vector3 Direction = Vector3.zero;
             public Vector3 Point = Vector3.zero;
+            public Vector3 HitNormal = Vector3.zero;
             public float PenetrationPower = 0f;
             public string BlockedBy;
             public string DeflectedBy;
             public string SourceId;
             public string AmmoId;
             public int FragmentIndex;
+            public float ArmorDamage = 0f;
             public string ProfileId;
 
             public static ApplyShotPacket Deserialize(NetDataReader reader)
@@ -664,12 +666,14 @@ namespace Fika.Core.Networking
                     Absorbed = reader.GetFloat(),
                     Direction = reader.GetVector3(),
                     Point = reader.GetVector3(),
+                    HitNormal = reader.GetVector3(),
                     PenetrationPower = reader.GetFloat(),
                     BlockedBy = reader.GetString(),
                     DeflectedBy = reader.GetString(),
                     SourceId = reader.GetString(),
                     AmmoId = reader.GetString(),
                     FragmentIndex = reader.GetInt(),
+                    ArmorDamage = reader.GetFloat(),
                     ProfileId = reader.GetString()
                 };
                 return packet;
@@ -684,12 +688,14 @@ namespace Fika.Core.Networking
                 writer.Put(packet.Absorbed);
                 writer.Put(packet.Direction);
                 writer.Put(packet.Point);
+                writer.Put(packet.HitNormal);
                 writer.Put(packet.PenetrationPower);
                 writer.Put(packet.BlockedBy);
                 writer.Put(packet.DeflectedBy);
                 writer.Put(packet.SourceId);
                 writer.Put(packet.AmmoId);
                 writer.Put(packet.FragmentIndex);
+                writer.Put(packet.ArmorDamage);
                 writer.Put(packet.ProfileId);
             }
         }
@@ -698,14 +704,12 @@ namespace Fika.Core.Networking
         {
             public uint CallbackId;
             public byte[] OperationBytes;
-            public string InventoryId;
             public static ItemControllerExecutePacket Deserialize(NetDataReader reader)
             {
                 ItemControllerExecutePacket packet = new()
                 {
                     CallbackId = reader.GetUInt(),
                     OperationBytes = reader.GetByteArray(),
-                    InventoryId = reader.GetString()
                 };
                 return packet;
             }
@@ -713,7 +717,6 @@ namespace Fika.Core.Networking
             {
                 writer.Put(packet.CallbackId);
                 writer.PutByteArray(packet.OperationBytes);
-                writer.Put(packet.InventoryId);
             }
         }
 

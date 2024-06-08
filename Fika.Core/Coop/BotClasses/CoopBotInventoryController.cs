@@ -2,9 +2,9 @@
 
 using Comfort.Common;
 using EFT;
-using JetBrains.Annotations;
 using Fika.Core.Coop.Players;
 using Fika.Core.Networking;
+using JetBrains.Annotations;
 using System.IO;
 using static EFT.Player;
 
@@ -30,11 +30,10 @@ namespace Fika.Core.Coop.BotClasses
             packet.ItemControllerExecutePacket = new()
             {
                 CallbackId = operation.Id,
-                OperationBytes = opBytes,
-                InventoryId = ID
+                OperationBytes = opBytes
             };
 
-            CoopBot.PacketSender?.InventoryPackets?.Enqueue(packet);
+            CoopBot.PacketSender.InventoryPackets.Enqueue(packet);
         }
     }
 }

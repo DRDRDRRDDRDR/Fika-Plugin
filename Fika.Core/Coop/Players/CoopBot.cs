@@ -6,15 +6,14 @@ using EFT.Ballistics;
 using EFT.Counters;
 using EFT.HealthSystem;
 using EFT.InventoryLogic;
-using LiteNetLib.Utils;
 using Fika.Core.Coop.BotClasses;
 using Fika.Core.Coop.ClientClasses;
 using Fika.Core.Coop.Components;
-using Fika.Core.Coop.Custom;
 using Fika.Core.Coop.GameMode;
 using Fika.Core.Coop.ObservedClasses;
 using Fika.Core.Coop.PacketHandlers;
 using Fika.Core.Networking;
+using LiteNetLib.Utils;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -25,7 +24,7 @@ using static Fika.Core.Networking.FikaSerialization;
 namespace Fika.Core.Coop.Players
 {
     /// <summary>
-    /// Used to simulate bots for the host
+    /// Used to simulate bots for the host.
     /// </summary>
     public class CoopBot : CoopPlayer
     {
@@ -34,51 +33,31 @@ namespace Fika.Core.Coop.Players
         /// The amount of players that have loaded this bot
         /// </summary>
         public int loadedPlayers = 0;
-        private FikaDynamicAI dynamicAi;
-        public bool isStarted = false;
+        //private FikaDynamicAI dynamicAi;
+        private bool firstEnabled;
 
-        public static async Task<LocalPlayer> CreateBot(
-            int playerId,
-            Vector3 position,
-            Quaternion rotation,
-            string layerName,
-            string prefix,
-            EPointOfView pointOfView,
-            Profile profile,
-            bool aiControl,
-            EUpdateQueue updateQueue,
-            EUpdateMode armsUpdateMode,
-            EUpdateMode bodyUpdateMode,
-            CharacterControllerSpawner.Mode characterControllerMode,
-            Func<float> getSensitivity, Func<float> getAimingSensitivity,
-            GInterface99 filter,
-            AbstractQuestControllerClass questController = null,
-            AbstractAchievementControllerClass achievementController = null,
-            bool isYourPlayer = false
-            )
+        public static async Task<LocalPlayer> CreateBot(int playerId, Vector3 position, Quaternion rotation,
+            string layerName, string prefix, EPointOfView pointOfView, Profile profile, bool aiControl,
+            EUpdateQueue updateQueue, EUpdateMode armsUpdateMode, EUpdateMode bodyUpdateMode,
+            CharacterControllerSpawner.Mode characterControllerMode, Func<float> getSensitivity,
+            Func<float> getAimingSensitivity, GInterface99 filter)
         {
             CoopBot player = null;
 
-            player = Create<CoopBot>(
-                    GClass1388.PLAYER_BUNDLE_NAME,
-                    playerId,
-                    position,
-                    updateQueue,
-                    armsUpdateMode,
-                    bodyUpdateMode,
-                    characterControllerMode,
-                    getSensitivity,
-                    getAimingSensitivity,
-                    prefix,
-                    aiControl);
-            player.IsYourPlayer = isYourPlayer;
+            player = Create<CoopBot>(GClass1388.PLAYER_BUNDLE_NAME, playerId, position, updateQueue, armsUpdateMode,
+                bodyUpdateMode, characterControllerMode, getSensitivity, getAimingSensitivity, prefix, aiControl);
+
+            player.IsYourPlayer = false;
 
             InventoryControllerClass inventoryController = new CoopBotInventoryController(player, profile, true);
 
+            player.PacketSender = player.gameObject.AddComponent<BotPacketSender>();
+            player.PacketReceiver = player.gameObject.AddComponent<PacketReceiver>();
+
             await player.Init(rotation, layerName, pointOfView, profile, inventoryController,
-                new CoopClientHealthController(profile.Health, player, inventoryController, profile.Skills, aiControl),
-                new CoopObservedStatisticsManager(), questController, achievementController, filter,
-                EVoipState.NotAvailable, aiControl, async: false);
+                new CoopBotHealthController(profile.Health, player, inventoryController, profile.Skills, aiControl),
+                new CoopObservedStatisticsManager(), null, null, filter,
+                EVoipState.NotAvailable, aiControl, false);
 
             player._handsController = EmptyHandsController.smethod_5<EmptyHandsController>(player);
             player._handsController.Spawn(1f, delegate { });
@@ -88,10 +67,7 @@ namespace Fika.Core.Coop.Players
             };
             player.AggressorFound = false;
             player._animators[0].enabled = true;
-            if (!player.IsYourPlayer)
-            {
-                player._armsUpdateQueue = EUpdateQueue.Update;
-            }
+            player._armsUpdateQueue = EUpdateQueue.Update;
 
             return player;
         }
@@ -164,21 +140,9 @@ namespace Fika.Core.Coop.Players
 
         protected override void Start()
         {
-            PacketSender = gameObject.AddComponent<BotPacketSender>();
-            PacketReceiver = gameObject.AddComponent<PacketReceiver>();
-
-            if (Singleton<FikaServer>.Instance.NetServer.ConnectedPeersCount > 0)
+            if (FikaPlugin.DisableBotMetabolism.Value)
             {
-                StartCoroutine(WaitForPlayersToLoadBot());
-            }
-            else
-            {
-                isStarted = true;
-            }
-
-            if (FikaPlugin.DynamicAI.Value)
-            {
-                dynamicAi = gameObject.AddComponent<FikaDynamicAI>();
+                HealthController.DisableMetabolism();
             }
         }
 
@@ -189,11 +153,8 @@ namespace Fika.Core.Coop.Players
 
         public override void Proceed(Weapon weapon, Callback<IFirearmHandsController> callback, bool scheduled = true)
         {
-            BotFirearmControllerHandler handler = new()
-            {
-                coopBot = this,
-                weapon = weapon
-            };
+            BotFirearmControllerHandler handler = new(this, weapon);
+
             bool flag = false;
             FirearmController firearmController;
             if ((firearmController = _handsController as FirearmController) != null)
@@ -204,33 +165,6 @@ namespace Fika.Core.Coop.Players
             handler.process = new Process<FirearmController, IFirearmHandsController>(this, func, handler.weapon, flag);
             handler.confirmCallback = new(handler.SendPacket);
             handler.process.method_0(new(handler.HandleResult), callback, scheduled);
-        }
-
-        private IEnumerator WaitForPlayersToLoadBot()
-        {
-            float originalDamageCoeff = ActiveHealthController.DamageCoeff;
-            AIData.BotOwner.Disable();
-            ActiveHealthController.SetDamageCoeff(0);
-            Vector3 spawnPosition = Position;
-            int connectedPeers = Singleton<FikaServer>.Instance.NetServer.ConnectedPeersCount;
-            float randomY = UnityEngine.Random.RandomRange(-9500, -10000);
-            DateTime start = DateTime.Now;
-            Teleport(new(0, randomY, 0));
-
-            while (loadedPlayers < connectedPeers && Math.Abs((start - DateTime.Now).TotalSeconds) < 30)
-            {
-                yield return new WaitForSeconds(1);
-                Teleport(new(0, randomY, 0));
-            }
-
-            // Wait a little bit longer just to make sure...
-            yield return new WaitForSeconds(2);
-
-            Teleport(new Vector3(spawnPosition.x, spawnPosition.y + 0.5f, spawnPosition.z));
-            yield return new WaitForSeconds(1);
-            ActiveHealthController.SetDamageCoeff(originalDamageCoeff);
-            AIData.BotOwner.BotState = EBotState.PreActive;
-            isStarted = true;
         }
 
         public override void OnDead(EDamageType damageType)
@@ -314,30 +248,64 @@ namespace Fika.Core.Coop.Players
         {
             yield return new WaitForSeconds(2);
 
-            PacketSender?.DestroyThis();
+            if (PacketSender != null)
+            {
+                PacketSender.DestroyThis();
+            }
         }
 
         public override void UpdateTick()
         {
             base.UpdateTick();
+        }
 
-            // Temp test to fix AI dying from hydration and energy...
-            /*if (ActiveHealthController.Energy.Current < 1)
+        protected void OnEnable()
+        {
+            if (!firstEnabled)
             {
-                logger($"Setting energy to 50 on {ProfileId}");
-                ActiveHealthController.ChangeEnergy(50);
+                firstEnabled = true;
+                return;
             }
 
-            if (ActiveHealthController.Hydration.Current < 1)
+            if (Singleton<FikaServer>.Instantiated)
             {
-                logger($"Setting hydration to 50 on {ProfileId}");
-                ActiveHealthController.ChangeHydration(50);
-            }*/
+                CoopGame coopGame = (CoopGame)Singleton<IFikaGame>.Instance;
+                if (coopGame != null && coopGame.Status == GameStatus.Started)
+                {
+                    FikaServer server = Singleton<FikaServer>.Instance;
+                    GenericPacket packet = new(EPackageType.EnableBot)
+                    {
+                        NetId = MainPlayer.NetId,
+                        BotNetId = NetId
+                    };
+                    server.SendDataToAll(new NetDataWriter(), ref packet, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                }
+            }
+        }
+
+        protected void OnDisable()
+        {
+            if (Singleton<FikaServer>.Instantiated)
+            {
+                CoopGame coopGame = (CoopGame)Singleton<IFikaGame>.Instance;
+                if (coopGame != null && coopGame.Status == GameStatus.Started)
+                {
+                    FikaServer server = Singleton<FikaServer>.Instance;
+                    GenericPacket packet = new(EPackageType.DisableBot)
+                    {
+                        NetId = MainPlayer.NetId,
+                        BotNetId = NetId
+                    };
+                    server.SendDataToAll(new NetDataWriter(), ref packet, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                }
+            }
         }
 
         public override void OnDestroy()
         {
-            FikaPlugin.Instance.FikaLogger.LogInfo("Destroying " + ProfileId);
+#if DEBUG
+            FikaPlugin.Instance.FikaLogger.LogInfo("Destroying " + ProfileId); 
+#endif
             if (Singleton<FikaServer>.Instantiated)
             {
                 CoopGame coopGame = (CoopGame)Singleton<IFikaGame>.Instance;
@@ -346,17 +314,17 @@ namespace Fika.Core.Coop.Players
                     FikaServer server = Singleton<FikaServer>.Instance;
                     GenericPacket packet = new(EPackageType.DisposeBot)
                     {
-                        ProfileId = MainPlayer.ProfileId,
-                        BotProfileId = ProfileId
+                        NetId = MainPlayer.NetId,
+                        BotNetId = NetId
                     };
                     server.SendDataToAll(new NetDataWriter(), ref packet, LiteNetLib.DeliveryMethod.ReliableOrdered);
                 }
             }
             if (CoopHandler.TryGetCoopHandler(out CoopHandler coopHandler))
             {
-                if (!coopHandler.Players.Remove(ProfileId))
+                if (!coopHandler.Players.Remove(NetId))
                 {
-                    FikaPlugin.Instance.FikaLogger.LogWarning("Unable to remove " + ProfileId + " from CoopHandler.Players when Destroying");
+                    FikaPlugin.Instance.FikaLogger.LogWarning("Unable to remove " + NetId + " from CoopHandler.Players when Destroying");
                 }
             }
             base.OnDestroy();
@@ -370,8 +338,13 @@ namespace Fika.Core.Coop.Players
             }
         }
 
-        private class BotFirearmControllerHandler
+        private class BotFirearmControllerHandler(CoopBot coopBot, Weapon weapon)
         {
+            private readonly CoopBot coopBot = coopBot;
+            public readonly Weapon weapon = weapon;
+            public Process<FirearmController, IFirearmHandsController> process;
+            public Action confirmCallback;
+
             internal BotFirearmController ReturnController()
             {
                 return BotFirearmController.Create(coopBot, weapon);
@@ -384,7 +357,7 @@ namespace Fika.Core.Coop.Players
                     return;
                 }
 
-                coopBot.PacketSender?.CommonPlayerPackets?.Enqueue(new()
+                coopBot.PacketSender.CommonPlayerPackets.Enqueue(new()
                 {
                     HasProceedPacket = true,
                     ProceedPacket = new()
@@ -403,14 +376,6 @@ namespace Fika.Core.Coop.Players
                     confirmCallback();
                 }
             }
-
-            public CoopBot coopBot;
-
-            public Weapon weapon;
-
-            public Process<FirearmController, IFirearmHandsController> process;
-
-            public Action confirmCallback;
         }
     }
 }

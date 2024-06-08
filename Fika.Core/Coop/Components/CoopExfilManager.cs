@@ -1,12 +1,12 @@
 ﻿using Comfort.Common;
 using EFT;
 using EFT.Interactive;
-using LiteNetLib;
-using LiteNetLib.Utils;
 using Fika.Core.Coop.GameMode;
 using Fika.Core.Coop.Matchmaker;
 using Fika.Core.Coop.Players;
 using Fika.Core.Networking;
+using LiteNetLib;
+using LiteNetLib.Utils;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -21,7 +21,7 @@ namespace Fika.Core.Coop.Components
         private ExfiltrationPoint[] exfiltrationPoints;
         private CarExtraction carExfil = null;
 
-        void Awake()
+        protected void Awake()
         {
             game = gameObject.GetComponent<CoopGame>();
             playerHandlers = [];
@@ -30,7 +30,7 @@ namespace Fika.Core.Coop.Components
             carExfil = FindObjectOfType<CarExtraction>();
         }
 
-        void Update()
+        protected void Update()
         {
             if (exfiltrationPoints == null)
             {
@@ -73,7 +73,7 @@ namespace Fika.Core.Coop.Components
                         if (!exfiltrationPoint.UnmetRequirements(player).Any())
                         {
                             game.MyExitLocation = exfiltrationPoint.Settings.Name;
-                            game.Extract(player, exfiltrationPoint);
+                            game.Extract((CoopPlayer)player, exfiltrationPoint);
                         }
                     }
 
@@ -196,21 +196,21 @@ namespace Fika.Core.Coop.Components
                     CoopPlayer mainPlayer = (CoopPlayer)Singleton<GameWorld>.Instance.MainPlayer;
                     GenericPacket packet = new(EPackageType.ExfilCountdown)
                     {
-                        ProfileId = mainPlayer.ProfileId,
+                        NetId = mainPlayer.NetId,
                         ExfilName = point.Settings.Name,
                         ExfilStartTime = point.ExfiltrationStartTime
                     };
 
-                    NetDataWriter writer = mainPlayer.PacketSender?.Writer;
+                    NetDataWriter writer = mainPlayer.PacketSender.Writer;
                     writer.Reset();
 
                     if (MatchmakerAcceptPatches.IsServer)
                     {
-                        mainPlayer.PacketSender?.Server?.SendDataToAll(writer, ref packet, DeliveryMethod.ReliableOrdered);
+                        mainPlayer.PacketSender.Server.SendDataToAll(writer, ref packet, DeliveryMethod.ReliableOrdered);
                     }
                     else if (MatchmakerAcceptPatches.IsClient)
                     {
-                        mainPlayer.PacketSender?.Client?.SendData(writer, ref packet, DeliveryMethod.ReliableOrdered);
+                        mainPlayer.PacketSender.Client.SendData(writer, ref packet, DeliveryMethod.ReliableOrdered);
                     }
                 }
                 countdownPoints.Add(point);

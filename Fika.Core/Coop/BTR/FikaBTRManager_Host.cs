@@ -7,11 +7,12 @@ using EFT;
 using EFT.GlobalEvents;
 using EFT.InventoryLogic;
 using EFT.Vehicle;
+using Fika.Core.Coop.GameMode;
+using Fika.Core.Coop.Players;
+using Fika.Core.Networking;
 using HarmonyLib;
 using LiteNetLib;
 using LiteNetLib.Utils;
-using Fika.Core.Coop.GameMode;
-using Fika.Core.Networking;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -70,7 +71,7 @@ namespace Fika.Core.Coop.BTR
             Type btrControllerType = typeof(BTRControllerClass);
             _updateTaxiPriceMethod = AccessTools.GetDeclaredMethods(btrControllerType).Single(IsUpdateTaxiPriceMethod);
             server = Singleton<FikaServer>.Instance;
-            btrLogger = new("BTR Host");
+            btrLogger = BepInEx.Logging.Logger.CreateLogSource("BTR Host");
         }
 
         public bool CanPlayerEnter(IPlayer player)
@@ -138,7 +139,7 @@ namespace Fika.Core.Coop.BTR
             {
                 BTRDataPacket = btrDataPacket,
                 HasBotProfileId = true,
-                BotProfileId = btrBotShooter.ProfileId
+                BotNetId = ((CoopPlayer)btrBotShooter.GetPlayer).NetId
             };
 
             writer.Reset();
@@ -383,7 +384,7 @@ namespace Fika.Core.Coop.BTR
 
             GenericPacket responsePacket = new(EPackageType.TraderServiceNotification)
             {
-                ProfileId = gameWorld.MainPlayer.ProfileId,
+                NetId = ((CoopPlayer)gameWorld.MainPlayer).NetId,
                 TraderServiceType = serviceType
             };
 
@@ -417,7 +418,7 @@ namespace Fika.Core.Coop.BTR
 
             GenericPacket responsePacket = new(EPackageType.TraderServiceNotification)
             {
-                ProfileId = gameWorld.MainPlayer.ProfileId,
+                NetId = ((CoopPlayer)gameWorld.MainPlayer).NetId,
                 TraderServiceType = packet.TraderServiceType
             };
 
@@ -455,7 +456,7 @@ namespace Fika.Core.Coop.BTR
         {
             try
             {
-                BTRSide btrSide = lastInteractPlayer.BtrInteractionSide ?? lastInteractedBtrSide;
+                BTRSide btrSide = lastInteractPlayer.BtrInteractionSide != null ? lastInteractPlayer.BtrInteractionSide : lastInteractedBtrSide;
                 byte sideId = btrClientSide.GetSideId(btrSide);
                 switch (sideId)
                 {

@@ -17,8 +17,10 @@ using Fika.Core.Coop.Matchmaker;
 using Fika.Core.Coop.ObservedClasses;
 using Fika.Core.Coop.PacketHandlers;
 using Fika.Core.Networking;
+using Fika.Core.Networking.Packets.Player;
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -27,6 +29,9 @@ using static Fika.Core.Networking.FikaSerialization;
 
 namespace Fika.Core.Coop.Players
 {
+    /// <summary>
+    /// CoopPlayer is the LocalPlayer there can only be one CoopPlayer in every game and that is yourself.
+    /// </summary>
     public class CoopPlayer : LocalPlayer
     {
         public PacketReceiver PacketReceiver;
@@ -39,60 +44,46 @@ namespace Fika.Core.Coop.Players
         public RagdollPacket RagdollPacket = default;
         public bool hasGround = false;
         public Transform RaycastCameraTransform;
+        public int NetId;
+        public bool IsObservedAI = false;
+        public Dictionary<uint, Callback<EOperationStatus>> OperationCallbacks = [];
 
-        public static async Task<LocalPlayer> Create(
-            int playerId,
-            Vector3 position,
-            Quaternion rotation,
-            string layerName,
-            string prefix,
-            EPointOfView pointOfView,
-            Profile profile,
-            bool aiControl,
-            EUpdateQueue updateQueue,
-            EUpdateMode armsUpdateMode,
-            EUpdateMode bodyUpdateMode,
-            CharacterControllerSpawner.Mode characterControllerMode,
-            Func<float> getSensitivity, Func<float> getAimingSensitivity,
-            GInterface99 filter,
-            AbstractQuestControllerClass questController = null,
-            AbstractAchievementControllerClass achievementsController = null)
+        public static async Task<LocalPlayer> Create(int playerId, Vector3 position, Quaternion rotation,
+            string layerName, string prefix, EPointOfView pointOfView, Profile profile, bool aiControl,
+            EUpdateQueue updateQueue, EUpdateMode armsUpdateMode, EUpdateMode bodyUpdateMode,
+            CharacterControllerSpawner.Mode characterControllerMode, Func<float> getSensitivity,
+            Func<float> getAimingSensitivity, GInterface99 filter, int netId, IStatisticsManager statisticsManager)
         {
             CoopPlayer player = null;
 
-            player = Create<CoopPlayer>(
-                    GClass1388.PLAYER_BUNDLE_NAME,
-                    playerId,
-                    position,
-                    updateQueue,
-                    armsUpdateMode,
-                    bodyUpdateMode,
-                    characterControllerMode,
-                    getSensitivity,
-                    getAimingSensitivity,
-                    prefix,
-                    isThirdPerson: false);
+            player = Create<CoopPlayer>(GClass1388.PLAYER_BUNDLE_NAME, playerId, position, updateQueue, armsUpdateMode,
+                bodyUpdateMode, characterControllerMode, getSensitivity, getAimingSensitivity, prefix, false);
 
             player.IsYourPlayer = true;
+            player.NetId = netId;
 
-            CoopClientInventoryController inventoryController = new(player, profile, true);
+            CoopClientInventoryController inventoryController = new(player, profile, false);
 
-            if (questController == null)
+            ISession session = Singleton<ClientApplication<ISession>>.Instance.GetClientBackEndSession();
+
+            GClass3206 questController = new(profile, inventoryController, session, true);
+            questController.Init();
+            questController.Run();
+
+            AchievementControllerClass achievementsController = new(profile, inventoryController, session, true);
+            achievementsController.Init();
+            achievementsController.Run();
+
+            if (MatchmakerAcceptPatches.IsServer)
             {
-                questController = new GClass3206(profile, inventoryController, null, true);
-                questController.Init();
-                questController.Run();
+                player.PacketSender = player.gameObject.AddComponent<ServerPacketSender>();
+            }
+            else if (MatchmakerAcceptPatches.IsClient)
+            {
+                player.PacketSender = player.gameObject.AddComponent<ClientPacketSender>();
             }
 
-            if (achievementsController == null)
-            {
-                achievementsController = new AchievementControllerClass(profile, inventoryController, null, true);
-                achievementsController.Init();
-                achievementsController.Run();
-            }
-
-            IStatisticsManager statisticsManager = null;
-            statisticsManager = new CoopClientStatisticsManager(player.Profile);
+            player.PacketReceiver = player.gameObject.AddComponent<PacketReceiver>();
 
             await player.Init(rotation, layerName, pointOfView, profile, inventoryController,
                 new CoopClientHealthController(profile.Health, player, inventoryController, profile.Skills, aiControl),
@@ -140,14 +131,14 @@ namespace Fika.Core.Coop.Players
             base.BtrInteraction(btr, placeId, interaction);
             if (MatchmakerAcceptPatches.IsClient)
             {
-                BTRInteractionPacket packet = new(ProfileId)
+                BTRInteractionPacket packet = new(NetId)
                 {
                     HasInteractPacket = true,
                     InteractPacket = btr.GetInteractWithBtrPacket(placeId, interaction)
                 };
 
-                PacketSender?.Writer?.Reset();
-                PacketSender?.Client?.SendData(PacketSender?.Writer, ref packet, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                PacketSender.Writer.Reset();
+                PacketSender.Client.SendData(PacketSender.Writer, ref packet, LiteNetLib.DeliveryMethod.ReliableOrdered);
             }
             else if (MatchmakerAcceptPatches.IsServer)
             {
@@ -158,14 +149,14 @@ namespace Fika.Core.Coop.Players
                     bool success = coopHandler.serverBTR.HostInteraction(this, interactPacket);
                     if (success)
                     {
-                        BTRInteractionPacket packet = new(ProfileId)
+                        BTRInteractionPacket packet = new(NetId)
                         {
                             HasInteractPacket = true,
                             InteractPacket = interactPacket
                         };
 
-                        PacketSender?.Writer?.Reset();
-                        PacketSender?.Server?.SendDataToAll(PacketSender?.Writer, ref packet, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                        PacketSender.Writer.Reset();
+                        PacketSender.Server.SendDataToAll(PacketSender.Writer, ref packet, LiteNetLib.DeliveryMethod.ReliableOrdered);
                     }
                 }
             }
@@ -180,7 +171,10 @@ namespace Fika.Core.Coop.Players
                 {
                     if (CoopHandler.TryGetCoopHandler(out CoopHandler coopHandler))
                     {
-                        coopHandler.clientBTR?.ClientInteraction(this, packet.InteractPacket);
+                        if (coopHandler.clientBTR != null)
+                        {
+                            coopHandler.clientBTR.ClientInteraction(this, packet.InteractPacket);
+                        }
                     }
                 }
             }
@@ -194,11 +188,13 @@ namespace Fika.Core.Coop.Players
         {
             if (IsYourPlayer)
             {
-                if (!FikaPlugin.Instance.FriendlyFire && damageInfo.Player is not null && damageInfo.Player.iPlayer is ObservedCoopPlayer observedCoopPlayer && !observedCoopPlayer.IsObservedAI)
+                if (damageInfo.Player != null)
                 {
-                    return;
+                    if (!FikaPlugin.Instance.FriendlyFire && damageInfo.Player.iPlayer is ObservedCoopPlayer observedCoopPlayer && !observedCoopPlayer.IsObservedAI)
+                    {
+                        return;
+                    }
                 }
-
                 if (colliderType == EBodyPartColliderType.HeadCommon)
                 {
                     damageInfo.Damage *= FikaPlugin.HeadDamageMultiplier.Value;
@@ -208,6 +204,11 @@ namespace Fika.Core.Coop.Players
                 {
                     damageInfo.Damage *= FikaPlugin.ArmpitDamageMultiplier.Value;
                 }
+
+                if (bodyPartType is EBodyPart.Stomach)
+                {
+                    damageInfo.Damage *= FikaPlugin.StomachDamageMultiplier.Value;
+                }
             }
 
             base.ApplyDamageInfo(damageInfo, bodyPartType, colliderType, absorbed);
@@ -215,21 +216,23 @@ namespace Fika.Core.Coop.Players
 
         public override GClass1676 ApplyShot(DamageInfo damageInfo, EBodyPart bodyPartType, EBodyPartColliderType colliderType, EArmorPlateCollider armorPlateCollider, GStruct390 shotId)
         {
-            if (IsYourPlayer)
+            if (damageInfo.DamageType is EDamageType.Sniper or EDamageType.Landmine)
             {
-                if (!FikaPlugin.Instance.FriendlyFire && damageInfo.Player is not null && damageInfo.Player.iPlayer is ObservedCoopPlayer observedCoopPlayer && !observedCoopPlayer.IsObservedAI)
-                {
-                    return null;
-                }
+                return base.ApplyShot(damageInfo, bodyPartType, colliderType, armorPlateCollider, shotId);
             }
 
-            return base.ApplyShot(damageInfo, bodyPartType, colliderType, armorPlateCollider, shotId);
+            if (damageInfo.Player != null && damageInfo.Player.iPlayer is CoopBot)
+            {
+                return base.ApplyShot(damageInfo, bodyPartType, colliderType, armorPlateCollider, shotId);
+            }
+
+            return null;
         }
 
         public override void Proceed(bool withNetwork, Callback<GInterface125> callback, bool scheduled = true)
         {
             base.Proceed(withNetwork, callback, scheduled);
-            PacketSender?.CommonPlayerPackets?.Enqueue(new()
+            PacketSender.CommonPlayerPackets.Enqueue(new()
             {
                 HasProceedPacket = true,
                 ProceedPacket = new()
@@ -242,14 +245,7 @@ namespace Fika.Core.Coop.Players
 
         public override void Proceed(FoodClass foodDrink, float amount, Callback<GInterface130> callback, int animationVariant, bool scheduled = true)
         {
-            FoodControllerHandler handler = new()
-            {
-                coopPlayer = this,
-                foodDrink = foodDrink,
-                bodyPart = EBodyPart.Head,
-                amount = amount,
-                animationVariant = animationVariant
-            };
+            FoodControllerHandler handler = new(this, foodDrink, amount, EBodyPart.Head, animationVariant);
 
             Func<MedsController> func = new(handler.ReturnController);
             handler.process = new(this, func, foodDrink, false);
@@ -259,11 +255,7 @@ namespace Fika.Core.Coop.Players
 
         public override void Proceed(Item item, Callback<GInterface135> callback, bool scheduled = true)
         {
-            QuickUseItemControllerHandler handler = new()
-            {
-                coopPlayer = this,
-                item = item
-            };
+            QuickUseItemControllerHandler handler = new(this, item);
 
             Func<QuickUseItemController> func = new(handler.ReturnController);
             handler.process = new(this, func, item, true);
@@ -273,11 +265,7 @@ namespace Fika.Core.Coop.Players
 
         public override void Proceed(KnifeComponent knife, Callback<IKnifeController> callback, bool scheduled = true)
         {
-            KnifeControllerHandler handler = new()
-            {
-                coopPlayer = this,
-                knife = knife
-            };
+            KnifeControllerHandler handler = new(this, knife);
 
             Func<KnifeController> func = new(handler.ReturnController);
             handler.process = new(this, func, handler.knife.Item, false);
@@ -287,11 +275,7 @@ namespace Fika.Core.Coop.Players
 
         public override void Proceed(KnifeComponent knife, Callback<GInterface134> callback, bool scheduled = true)
         {
-            QuickKnifeControllerHandler handler = new()
-            {
-                coopPlayer = this,
-                knife = knife
-            };
+            QuickKnifeControllerHandler handler = new(this, knife);
 
             Func<QuickKnifeKickController> func = new(handler.ReturnController);
             handler.process = new(this, func, handler.knife.Item, true);
@@ -301,13 +285,7 @@ namespace Fika.Core.Coop.Players
 
         public override void Proceed(MedsClass meds, EBodyPart bodyPart, Callback<GInterface130> callback, int animationVariant, bool scheduled = true)
         {
-            MedsControllerHandler handler = new()
-            {
-                coopPlayer = this,
-                meds = meds,
-                bodyPart = bodyPart,
-                animationVariant = animationVariant
-            };
+            MedsControllerHandler handler = new(this, meds, bodyPart, animationVariant);
 
             Func<MedsController> func = new(handler.ReturnController);
             handler.process = new(this, func, meds, false);
@@ -317,11 +295,7 @@ namespace Fika.Core.Coop.Players
 
         public override void Proceed(GrenadeClass throwWeap, Callback<IGrenadeController> callback, bool scheduled = true)
         {
-            QuickGrenadeControllerHandler handler = new()
-            {
-                coopPlayer = this,
-                throwWeap = throwWeap
-            };
+            QuickGrenadeControllerHandler handler = new(this, throwWeap);
 
             Func<QuickGrenadeThrowController> func = new(handler.ReturnController);
             handler.process = new(this, func, throwWeap, false);
@@ -331,11 +305,7 @@ namespace Fika.Core.Coop.Players
 
         public override void Proceed(GrenadeClass throwWeap, Callback<IHandsThrowController> callback, bool scheduled = true)
         {
-            GrenadeControllerHandler handler = new()
-            {
-                coopPlayer = this,
-                throwWeap = throwWeap
-            };
+            GrenadeControllerHandler handler = new(this, throwWeap);
 
             Func<GrenadeController> func = new(handler.ReturnController);
             handler.process = new(this, func, throwWeap, false);
@@ -345,11 +315,7 @@ namespace Fika.Core.Coop.Players
 
         public override void Proceed(Weapon weapon, Callback<IFirearmHandsController> callback, bool scheduled = true)
         {
-            FirearmControllerHandler handler = new()
-            {
-                coopPlayer = this,
-                weapon = weapon
-            };
+            FirearmControllerHandler handler = new(this, weapon);
             bool flag = false;
             FirearmController firearmController;
             if ((firearmController = _handsController as FirearmController) != null)
@@ -372,7 +338,7 @@ namespace Fika.Core.Coop.Players
         {
             base.DropCurrentController(callback, fastDrop, nextControllerItem);
 
-            /*PacketSender?.CommonPlayerPackets?.Enqueue(new()
+            /*PacketSender.CommonPlayerPackets.Enqueue(new()
             {
                 HasDrop = true,
                 DropPacket = new()
@@ -392,7 +358,7 @@ namespace Fika.Core.Coop.Players
             }
 
             base.SetInventoryOpened(opened);
-            PacketSender?.CommonPlayerPackets?.Enqueue(new()
+            PacketSender.CommonPlayerPackets.Enqueue(new()
             {
                 HasInventoryChanged = true,
                 SetInventoryOpen = opened
@@ -402,7 +368,7 @@ namespace Fika.Core.Coop.Players
         public override void SetCompassState(bool value)
         {
             base.SetCompassState(value);
-            PacketSender?.FirearmPackets?.Enqueue(new()
+            PacketSender.FirearmPackets.Enqueue(new()
             {
                 HasCompassChange = true,
                 CompassState = value
@@ -423,15 +389,18 @@ namespace Fika.Core.Coop.Players
         {
             GStruct163[] lightStates = _helmetLightControllers.Select(new Func<TacticalComboVisualController, GStruct163>(ClientPlayer.Class1430.class1430_0.method_0)).ToArray();
 
-            PacketSender?.CommonPlayerPackets?.Enqueue(new()
+            if (PacketSender != null)
             {
-                HasHeadLightsPacket = true,
-                HeadLightsPacket = new()
+                PacketSender.CommonPlayerPackets.Enqueue(new()
                 {
-                    Amount = lightStates.Count(),
-                    LightStates = lightStates
-                }
-            });
+                    HasHeadLightsPacket = true,
+                    HeadLightsPacket = new()
+                    {
+                        Amount = lightStates.Count(),
+                        LightStates = lightStates
+                    }
+                });
+            }
         }
 
         public override void OnItemAddedOrRemoved(Item item, ItemAddress location, bool added)
@@ -445,7 +414,7 @@ namespace Fika.Core.Coop.Players
 
             if (ActiveHealthController.IsAlive)
             {
-                PacketSender?.CommonPlayerPackets?.Enqueue(new()
+                PacketSender.CommonPlayerPackets.Enqueue(new()
                 {
                     Phrase = @event,
                     PhraseIndex = clip.NetId
@@ -456,7 +425,7 @@ namespace Fika.Core.Coop.Players
         public override void OperateStationaryWeapon(StationaryWeapon stationaryWeapon, GStruct169.EStationaryCommand command)
         {
             base.OperateStationaryWeapon(stationaryWeapon, command);
-            PacketSender?.CommonPlayerPackets?.Enqueue(new()
+            PacketSender.CommonPlayerPackets.Enqueue(new()
             {
                 HasStationaryPacket = true,
                 StationaryPacket = new()
@@ -497,7 +466,7 @@ namespace Fika.Core.Coop.Players
                     ItemId = (interactionResult is GClass2964 keyInteractionResult) ? keyInteractionResult.Key.Item.Id : string.Empty
                 }
             };
-            PacketSender?.CommonPlayerPackets?.Enqueue(packet);
+            PacketSender.CommonPlayerPackets.Enqueue(packet);
         }
 
         // Execute
@@ -522,7 +491,7 @@ namespace Fika.Core.Coop.Players
                     ItemId = (interactionResult is GClass2964 keyInteractionResult) ? keyInteractionResult.Key.Item.Id : string.Empty
                 }
             };
-            PacketSender?.CommonPlayerPackets?.Enqueue(packet);
+            PacketSender.CommonPlayerPackets.Enqueue(packet);
 
             UpdateInteractionCast();
         }
@@ -530,7 +499,7 @@ namespace Fika.Core.Coop.Players
         public override void vmethod_3(EGesture gesture)
         {
             base.vmethod_3(gesture);
-            PacketSender?.FirearmPackets?.Enqueue(new()
+            PacketSender.FirearmPackets.Enqueue(new()
             {
                 Gesture = gesture
             });
@@ -552,7 +521,7 @@ namespace Fika.Core.Coop.Players
                 SetupDogTag();
             }
 
-            return new(ProfileId)
+            return new(NetId)
             {
                 Packet = packet,
                 KillerId = !string.IsNullOrEmpty(KillerId) ? KillerId : null,
@@ -580,7 +549,10 @@ namespace Fika.Core.Coop.Players
         {
             yield return new WaitForSeconds(2);
 
-            PacketSender?.DestroyThis();
+            if (PacketSender != null)
+            {
+                PacketSender.DestroyThis();
+            }
         }
 
         public override void Move(Vector2 direction)
@@ -678,10 +650,7 @@ namespace Fika.Core.Coop.Players
                         Action action;
                         if (packet.InteractionType == EInteractionType.Unlock)
                         {
-                            KeyHandler keyHandler = new()
-                            {
-                                player = this
-                            };
+                            KeyHandler keyHandler = new(this);
 
                             if (string.IsNullOrEmpty(packet.ItemId))
                             {
@@ -814,11 +783,11 @@ namespace Fika.Core.Coop.Players
                     Color pingColor = FikaPlugin.PingColor.Value;
                     pingColor = new(pingColor.r, pingColor.g, pingColor.b, 1);
                     // ref so that we can mutate it if we want to, ex: if I ping a switch I want it at the switch.gameObject.position + Vector3.up
-                    abstractPing?.Initialize(ref hitPoint, userData, pingColor);
+                    abstractPing.Initialize(ref hitPoint, userData, pingColor);
 
                     GenericPacket genericPacket = new()
                     {
-                        ProfileId = ProfileId,
+                        NetId = NetId,
                         PacketType = EPackageType.Ping,
                         PingLocation = hitPoint,
                         PingType = pingType,
@@ -826,14 +795,14 @@ namespace Fika.Core.Coop.Players
                         Nickname = Profile.Nickname
                     };
 
-                    PacketSender?.Writer?.Reset();
+                    PacketSender.Writer.Reset();
                     if (MatchmakerAcceptPatches.IsServer)
                     {
-                        PacketSender?.Server?.SendDataToAll(PacketSender.Writer, ref genericPacket, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                        PacketSender.Server.SendDataToAll(PacketSender.Writer, ref genericPacket, LiteNetLib.DeliveryMethod.ReliableOrdered);
                     }
                     else if (MatchmakerAcceptPatches.IsClient)
                     {
-                        PacketSender?.Client?.SendData(PacketSender.Writer, ref genericPacket, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                        PacketSender.Client.SendData(PacketSender.Writer, ref genericPacket, LiteNetLib.DeliveryMethod.ReliableOrdered);
                     }
 
                     if (FikaPlugin.PlayPingAnimation.Value)
@@ -864,11 +833,7 @@ namespace Fika.Core.Coop.Players
 
         public override void TryInteractionCallback(LootableContainer container)
         {
-            LootableContainerInteractionHandler handler = new()
-            {
-                player = this,
-                container = container
-            };
+            LootableContainerInteractionHandler handler = new(this, container);
             if (handler.container != null && _openAction != null)
             {
                 _openAction(new Action(handler.Handle));
@@ -878,15 +843,6 @@ namespace Fika.Core.Coop.Players
 
         protected virtual void Start()
         {
-            if (MatchmakerAcceptPatches.IsServer)
-            {
-                PacketSender = gameObject.AddComponent<ServerPacketSender>();
-            }
-            else if (MatchmakerAcceptPatches.IsClient)
-            {
-                PacketSender = gameObject.AddComponent<ClientPacketSender>();
-            }
-            PacketReceiver = gameObject.AddComponent<PacketReceiver>();
             Profile.Info.GroupId = "Fika";
 
             if (Side != EPlayerSide.Savage)
@@ -991,7 +947,7 @@ namespace Fika.Core.Coop.Players
             {
                 if (this is ObservedCoopPlayer observedCoopPlayer)
                 {
-                    observedCoopPlayer?.HandleProceedPacket(packet.ProceedPacket);
+                    observedCoopPlayer.HandleProceedPacket(packet.ProceedPacket);
                 }
             }
 
@@ -1044,12 +1000,37 @@ namespace Fika.Core.Coop.Players
 
         }
 
+        public void HandleCallbackFromServer(in OperationCallbackPacket operationCallbackPacket)
+        {
+            if (OperationCallbacks.TryGetValue(operationCallbackPacket.CallbackId, out Callback<EOperationStatus> callback))
+            {
+                if (operationCallbackPacket.OperationStatus != EOperationStatus.Started)
+                {
+                    OperationCallbacks.Remove(operationCallbackPacket.CallbackId);
+                }
+                if (operationCallbackPacket.OperationStatus != EOperationStatus.Failed)
+                {
+                    callback(new Result<EOperationStatus>(operationCallbackPacket.OperationStatus));
+                }
+                else
+                {
+                    callback(new Result<EOperationStatus>(EOperationStatus.Failed)
+                    {
+                        Error = operationCallbackPacket.Error
+                    });
+                }
+            }
+            else
+            {
+                FikaPlugin.Instance.FikaLogger.LogError($"Could not find CallbackId {operationCallbackPacket.CallbackId}!");
+            }
+        }
+
         public virtual void HandleInventoryPacket(in InventoryPacket packet)
         {
             if (packet.HasItemControllerExecutePacket)
             {
-                var inventory = _inventoryController;
-                if (inventory != null)
+                if (_inventoryController != null)
                 {
                     using MemoryStream memoryStream = new(packet.ItemControllerExecutePacket.OperationBytes);
                     using BinaryReader binaryReader = new(memoryStream);
@@ -1057,22 +1038,9 @@ namespace Fika.Core.Coop.Players
                     {
                         GStruct411 result = ToInventoryOperation(binaryReader.ReadPolymorph<GClass1532>());
 
-                        if (!result.Succeeded)
-                        {
-                            /*
-                                This happens whenever another player grabs something off of an AI
-                                that this client didn't spawn
-                            */
-                            FikaPlugin.Instance.FikaLogger.LogError("HandleInventoryPacket: " + result.Error);
-                            return;
-                        }
+                        InventoryOperationHandler opHandler = new(result);
 
-                        InventoryOperationHandler opHandler = new()
-                        {
-                            result = result
-                        };
-
-                        opHandler.result.Value.vmethod_0(new Callback(opHandler.RunOperation), false);
+                        opHandler.opResult.Value.vmethod_0(new Callback(opHandler.HandleResult), false);
 
                         // TODO: Hacky workaround to fix errors due to each client generating new IDs. Might need to find a more 'elegant' solution later.
                         // Unknown what problems this might cause so far.
@@ -1093,7 +1061,9 @@ namespace Fika.Core.Coop.Players
                                     }
                                 }
                                 else
+                                {
                                     FikaPlugin.Instance.FikaLogger.LogError("Split: Item was null");
+                                }
                             }
                         }
 
@@ -1113,21 +1083,46 @@ namespace Fika.Core.Coop.Players
                                 }
                             }
                             else
+                            {
                                 FikaPlugin.Instance.FikaLogger.LogError("Split: Item was null");
+                            }
                         }
+
+                        /*// Fix for folding not replicating
+                        if (result.Value is GClass2858 foldOperation)
+                        {
+                            if (HandsController is CoopObservedFirearmController observedFirearmController)
+                            {
+                                if (observedFirearmController.Weapon != null && observedFirearmController.Weapon.Foldable != null)
+                                {
+                                    observedFirearmController.InitiateOperation<FirearmController.Class1020>().Start(foldOperation, null);
+                                }
+                            }
+                        }*/
                     }
                     catch (Exception exception)
                     {
-                        FikaPlugin.Instance.FikaLogger.LogError(exception);
+                        FikaPlugin.Instance.FikaLogger.LogError($"ItemControllerExecutePacket::Exception thrown: {exception}");
+                        if (MatchmakerAcceptPatches.IsServer)
+                        {
+                            OperationCallbackPacket callbackPacket = new(NetId, packet.ItemControllerExecutePacket.CallbackId, EOperationStatus.Failed);
+                            Singleton<FikaServer>.Instance.SendDataToAll(new(), ref callbackPacket, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                        }
                     }
                 }
                 else
                 {
                     FikaPlugin.Instance.FikaLogger.LogError("ItemControllerExecutePacket: inventory was null!");
+                    if (MatchmakerAcceptPatches.IsServer)
+                    {
+                        OperationCallbackPacket callbackPacket = new(NetId, packet.ItemControllerExecutePacket.CallbackId, EOperationStatus.Failed);
+                        Singleton<FikaServer>.Instance.SendDataToAll(new(), ref callbackPacket, LiteNetLib.DeliveryMethod.ReliableOrdered);
+                    }
                 }
             }
 
-            if (packet.HasSearchPacket)
+            // Currently unused
+            /*if (packet.HasSearchPacket)
             {
                 if (!packet.SearchPacket.IsStop)
                 {
@@ -1145,7 +1140,7 @@ namespace Fika.Core.Coop.Players
                         _inventoryController.ExecuteStop(operation);
                     }
                 }
-            }
+            }*/
         }
 
         public virtual void HandleWeaponPacket(in WeaponPacket packet)
@@ -1227,7 +1222,11 @@ namespace Fika.Core.Coop.Players
             {
                 if (HandsController is ItemHandsController handsController)
                 {
-                    handsController.CompassStateHandler(packet.CompassState);
+                    handsController.ApplyCompassPacket(new()
+                    {
+                        Toggle = true,
+                        Status = packet.CompassState
+                    });
                 }
             }
 
@@ -1236,16 +1235,24 @@ namespace Fika.Core.Coop.Players
                 if (HandsController is CoopObservedKnifeController knifeController)
                 {
                     if (packet.KnifePacket.Examine)
+                    {
                         knifeController.ExamineWeapon();
+                    }
 
                     if (packet.KnifePacket.Kick)
+                    {
                         knifeController.MakeKnifeKick();
+                    }
 
                     if (packet.KnifePacket.AltKick)
+                    {
                         knifeController.MakeAlternativeKick();
+                    }
 
                     if (packet.KnifePacket.BreakCombo)
+                    {
                         knifeController.BrakeCombo();
+                    }
                 }
                 else
                 {
@@ -1262,11 +1269,13 @@ namespace Fika.Core.Coop.Players
                 DamageType = packet.DamageInfo.DamageType,
                 BodyPartColliderType = packet.DamageInfo.ColliderType,
                 HitPoint = packet.DamageInfo.Point,
+                HitNormal = packet.DamageInfo.HitNormal,
                 Direction = packet.DamageInfo.Direction,
                 PenetrationPower = packet.DamageInfo.PenetrationPower,
                 BlockedBy = packet.DamageInfo.BlockedBy,
                 DeflectedBy = packet.DamageInfo.DeflectedBy,
-                SourceId = packet.DamageInfo.SourceId
+                SourceId = packet.DamageInfo.SourceId,
+                ArmorDamage = packet.DamageInfo.ArmorDamage
             };
 
             if (!string.IsNullOrEmpty(packet.DamageInfo.ProfileId))
@@ -1276,6 +1285,13 @@ namespace Fika.Core.Coop.Players
                 if (player != null)
                 {
                     damageInfo.Player = player;
+                    if (IsYourPlayer)
+                    {
+                        if (!FikaPlugin.Instance.FriendlyFire && damageInfo.Player.iPlayer is ObservedCoopPlayer observedCoopPlayer && !observedCoopPlayer.IsObservedAI)
+                        {
+                            return;
+                        }
+                    }
                 }
 
                 if (Singleton<GameWorld>.Instance.GetAlivePlayerByProfileID(packet.DamageInfo.ProfileId).HandsController.Item is Weapon weapon)
@@ -1284,7 +1300,6 @@ namespace Fika.Core.Coop.Players
                 }
             }
 
-            //ClientApplyDamageInfo(damageInfo, packet.ApplyDamageInfo.BodyPartType, packet.ApplyDamageInfo.ColliderType, packet.ApplyDamageInfo.Absorbed);
             ClientApplyShot(damageInfo, packet.DamageInfo.BodyPartType, packet.DamageInfo.ColliderType, packet.DamageInfo.ArmorPlateCollider);
         }
 
@@ -1317,11 +1332,20 @@ namespace Fika.Core.Coop.Players
                         dogtagComponent.Level = Profile.Info.Experience > 0 ? Profile.Info.Level : 1;
                         dogtagComponent.Time = DateTime.Now;
                         dogtagComponent.Status = "Killed by ";
-                        dogtagComponent.WeaponName = LastDamageInfo.Weapon.Name;
+                        dogtagComponent.WeaponName = LastDamageInfo.Weapon != null ? LastDamageInfo.Weapon.Name : "Unknown";
                         dogtagComponent.GroupId = GroupId;
                     }
                 }
             }
+        }
+
+        public void CheckAndResetControllers(ExitStatus exitStatus, float pastTime, string locationId, string exitName)
+        {
+            _questController?.CheckExitConditionCounters(exitStatus, pastTime, locationId, exitName, HealthController.BodyPartEffects, TriggerZones);
+            _questController?.ResetCurrentNullableCounters();
+
+            _achievementsController?.CheckExitConditionCounters(exitStatus, pastTime, locationId, exitName, HealthController.BodyPartEffects, TriggerZones);
+            _achievementsController?.ResetCurrentNullableCounters();
         }
 
         public virtual void SetInventory(EquipmentClass equipmentClass)
@@ -1337,7 +1361,10 @@ namespace Fika.Core.Coop.Players
         public override void Dispose()
         {
             base.Dispose();
-            PacketSender?.DestroyThis();
+            if (PacketSender != null)
+            {
+                PacketSender.DestroyThis();
+            }
         }
 
         public override void SendHandsInteractionStateChanged(bool value, int animationId)
@@ -1345,7 +1372,7 @@ namespace Fika.Core.Coop.Players
             base.SendHandsInteractionStateChanged(value, animationId);
             if (value)
             {
-                PacketSender?.CommonPlayerPackets?.Enqueue(new()
+                PacketSender.CommonPlayerPackets.Enqueue(new()
                 {
                     Pickup = value,
                     PickupAnimation = animationId
@@ -1355,7 +1382,7 @@ namespace Fika.Core.Coop.Players
 
         public override void OnVaulting()
         {
-            PacketSender?.CommonPlayerPackets?.Enqueue(new()
+            PacketSender.CommonPlayerPackets.Enqueue(new()
             {
                 HasVaultPacket = true,
                 VaultPacket = new()
@@ -1375,7 +1402,9 @@ namespace Fika.Core.Coop.Players
         {
             Item item = Inventory.Equipment.FindItem(itemId);
             if (item != null)
+            {
                 return item;
+            }
 
             GStruct416<Item> itemResult = FindItemById(itemId);
             if (itemResult.Error != null)
@@ -1386,33 +1415,38 @@ namespace Fika.Core.Coop.Players
         }
 
         #region handlers
-        private class KeyHandler()
+        private class KeyHandler(CoopPlayer player)
         {
+            private readonly CoopPlayer player = player;
+            public GStruct416<GClass2964> unlockResult;
+
             internal void HandleKeyEvent()
             {
                 unlockResult.Value.RaiseEvents(player._inventoryController, CommandStatus.Succeed);
             }
-
-            public GStruct416<GClass2964> unlockResult;
-
-            public CoopPlayer player;
         }
 
-        private class InventoryOperationHandler()
+        private class InventoryOperationHandler(GStruct411 opResult)
         {
-            public GStruct411 result;
-            internal void RunOperation(IResult result)
+            public readonly GStruct411 opResult = opResult;
+
+            internal void HandleResult(IResult result)
             {
-                if (!result.Succeed)
-                    Debug.Log($"Error in operation: {result.Error}");
+                if (!result.Succeed || !string.IsNullOrEmpty(result.Error))
+                {
+                    FikaPlugin.Instance.FikaLogger.LogError($"Error in operation: {result.Error}");
+                }
             }
         }
 
-        private class LootableContainerInteractionHandler
+        private class LootableContainerInteractionHandler(CoopPlayer player, LootableContainer container)
         {
+            private readonly CoopPlayer player = player;
+            public readonly LootableContainer container = container;
+
             public void Handle()
             {
-                player.PacketSender?.CommonPlayerPackets?.Enqueue(new()
+                player.PacketSender.CommonPlayerPackets.Enqueue(new()
                 {
                     HasContainerInteractionPacket = true,
                     ContainerInteractionPacket = new()
@@ -1429,14 +1463,15 @@ namespace Fika.Core.Coop.Players
                     player.MovementContext.LevelOnApproachStart = -1f;
                 }
             }
-
-            public CoopPlayer player;
-
-            public LootableContainer container;
         }
 
-        private class FirearmControllerHandler
+        private class FirearmControllerHandler(CoopPlayer coopPlayer, Weapon weapon)
         {
+            private readonly CoopPlayer coopPlayer = coopPlayer;
+            public readonly Weapon weapon = weapon;
+            public Process<FirearmController, IFirearmHandsController> process;
+            public Action confirmCallback;
+
             internal CoopClientFirearmController ReturnController()
             {
                 return CoopClientFirearmController.Create(coopPlayer, weapon);
@@ -1449,7 +1484,7 @@ namespace Fika.Core.Coop.Players
                     return;
                 }
 
-                coopPlayer.PacketSender?.CommonPlayerPackets?.Enqueue(new()
+                coopPlayer.PacketSender.CommonPlayerPackets.Enqueue(new()
                 {
                     HasProceedPacket = true,
                     ProceedPacket = new()
@@ -1468,18 +1503,15 @@ namespace Fika.Core.Coop.Players
                     confirmCallback();
                 }
             }
-
-            public CoopPlayer coopPlayer;
-
-            public Weapon weapon;
-
-            public Process<FirearmController, IFirearmHandsController> process;
-
-            public Action confirmCallback;
         }
 
-        private class QuickUseItemControllerHandler
+        private class QuickUseItemControllerHandler(CoopPlayer coopPlayer, Item item)
         {
+            private readonly CoopPlayer coopPlayer = coopPlayer;
+            private readonly Item item = item;
+            public Process<QuickUseItemController, GInterface135> process;
+            public Action confirmCallback;
+
             internal QuickUseItemController ReturnController()
             {
                 return QuickUseItemController.smethod_5<QuickUseItemController>(coopPlayer, item);
@@ -1487,7 +1519,7 @@ namespace Fika.Core.Coop.Players
 
             internal void SendPacket()
             {
-                coopPlayer.PacketSender?.CommonPlayerPackets?.Enqueue(new()
+                coopPlayer.PacketSender.CommonPlayerPackets.Enqueue(new()
                 {
                     HasProceedPacket = true,
                     ProceedPacket = new()
@@ -1506,18 +1538,17 @@ namespace Fika.Core.Coop.Players
                     confirmCallback();
                 }
             }
-
-            public CoopPlayer coopPlayer;
-
-            public Item item;
-
-            public Process<QuickUseItemController, GInterface135> process;
-
-            public Action confirmCallback;
         }
 
-        private class MedsControllerHandler
+        private class MedsControllerHandler(CoopPlayer coopPlayer, MedsClass meds, EBodyPart bodyPart, int animationVariant)
         {
+            private readonly CoopPlayer coopPlayer = coopPlayer;
+            private readonly MedsClass meds = meds;
+            private readonly EBodyPart bodyPart = bodyPart;
+            private readonly int animationVariant = animationVariant;
+            public Process<MedsController, GInterface130> process;
+            public Action confirmCallback;
+
             internal MedsController ReturnController()
             {
                 return MedsController.smethod_5<MedsController>(coopPlayer, meds, bodyPart, 1f, animationVariant);
@@ -1525,7 +1556,7 @@ namespace Fika.Core.Coop.Players
 
             internal void SendPacket()
             {
-                coopPlayer.PacketSender?.CommonPlayerPackets?.Enqueue(new()
+                coopPlayer.PacketSender.CommonPlayerPackets.Enqueue(new()
                 {
                     HasProceedPacket = true,
                     ProceedPacket = new()
@@ -1546,22 +1577,18 @@ namespace Fika.Core.Coop.Players
                     confirmCallback();
                 }
             }
-
-            public CoopPlayer coopPlayer;
-
-            public MedsClass meds;
-
-            public EBodyPart bodyPart;
-
-            public int animationVariant;
-
-            public Process<MedsController, GInterface130> process;
-
-            public Action confirmCallback;
         }
 
-        private class FoodControllerHandler
+        private class FoodControllerHandler(CoopPlayer coopPlayer, FoodClass foodDrink, float amount, EBodyPart bodyPart, int animationVariant)
         {
+            private readonly CoopPlayer coopPlayer = coopPlayer;
+            private readonly FoodClass foodDrink = foodDrink;
+            private readonly float amount = amount;
+            private readonly EBodyPart bodyPart = bodyPart;
+            private readonly int animationVariant = animationVariant;
+            public Process<MedsController, GInterface130> process;
+            public Action confirmCallback;
+
             internal MedsController ReturnController()
             {
                 return MedsController.smethod_5<MedsController>(coopPlayer, foodDrink, EBodyPart.Head, amount, animationVariant);
@@ -1569,7 +1596,7 @@ namespace Fika.Core.Coop.Players
 
             internal void SendPacket()
             {
-                coopPlayer.PacketSender?.CommonPlayerPackets?.Enqueue(new()
+                coopPlayer.PacketSender.CommonPlayerPackets.Enqueue(new()
                 {
                     HasProceedPacket = true,
                     ProceedPacket = new()
@@ -1591,24 +1618,15 @@ namespace Fika.Core.Coop.Players
                     confirmCallback();
                 }
             }
-
-            public CoopPlayer coopPlayer;
-
-            public FoodClass foodDrink;
-
-            public float amount;
-
-            public EBodyPart bodyPart;
-
-            public int animationVariant;
-
-            public Process<MedsController, GInterface130> process;
-
-            public Action confirmCallback;
         }
 
-        private class KnifeControllerHandler
+        private class KnifeControllerHandler(CoopPlayer coopPlayer, KnifeComponent knife)
         {
+            private readonly CoopPlayer coopPlayer = coopPlayer;
+            public readonly KnifeComponent knife = knife;
+            public Process<KnifeController, IKnifeController> process;
+            public Action confirmCallback;
+
             internal CoopClientKnifeController ReturnController()
             {
                 return CoopClientKnifeController.Create(coopPlayer, knife);
@@ -1616,7 +1634,7 @@ namespace Fika.Core.Coop.Players
 
             internal void SendPacket()
             {
-                coopPlayer.PacketSender?.CommonPlayerPackets?.Enqueue(new()
+                coopPlayer.PacketSender.CommonPlayerPackets.Enqueue(new()
                 {
                     HasProceedPacket = true,
                     ProceedPacket = new()
@@ -1635,18 +1653,15 @@ namespace Fika.Core.Coop.Players
                     confirmCallback();
                 }
             }
-
-            public CoopPlayer coopPlayer;
-
-            public KnifeComponent knife;
-
-            public Process<KnifeController, IKnifeController> process;
-
-            public Action confirmCallback;
         }
 
-        private class QuickKnifeControllerHandler
+        private class QuickKnifeControllerHandler(CoopPlayer coopPlayer, KnifeComponent knife)
         {
+            private readonly CoopPlayer coopPlayer = coopPlayer;
+            public readonly KnifeComponent knife = knife;
+            public Process<QuickKnifeKickController, GInterface134> process;
+            public Action confirmCallback;
+
             internal QuickKnifeKickController ReturnController()
             {
                 return QuickKnifeKickController.smethod_8<QuickKnifeKickController>(coopPlayer, knife);
@@ -1654,7 +1669,7 @@ namespace Fika.Core.Coop.Players
 
             internal void SendPacket()
             {
-                coopPlayer.PacketSender?.CommonPlayerPackets?.Enqueue(new()
+                coopPlayer.PacketSender.CommonPlayerPackets.Enqueue(new()
                 {
                     HasProceedPacket = true,
                     ProceedPacket = new()
@@ -1673,18 +1688,15 @@ namespace Fika.Core.Coop.Players
                     confirmCallback();
                 }
             }
-
-            public CoopPlayer coopPlayer;
-
-            public KnifeComponent knife;
-
-            public Process<QuickKnifeKickController, GInterface134> process;
-
-            public Action confirmCallback;
         }
 
-        private class GrenadeControllerHandler
+        private class GrenadeControllerHandler(CoopPlayer coopPlayer, GrenadeClass throwWeap)
         {
+            private readonly CoopPlayer coopPlayer = coopPlayer;
+            private readonly GrenadeClass throwWeap = throwWeap;
+            public Process<GrenadeController, IHandsThrowController> process;
+            public Action confirmCallback;
+
             internal CoopClientGrenadeController ReturnController()
             {
                 return CoopClientGrenadeController.Create(coopPlayer, throwWeap);
@@ -1692,7 +1704,7 @@ namespace Fika.Core.Coop.Players
 
             internal void SendPacket()
             {
-                coopPlayer.PacketSender?.CommonPlayerPackets?.Enqueue(new()
+                coopPlayer.PacketSender.CommonPlayerPackets.Enqueue(new()
                 {
                     HasProceedPacket = true,
                     ProceedPacket = new()
@@ -1711,18 +1723,15 @@ namespace Fika.Core.Coop.Players
                     confirmCallback();
                 }
             }
-
-            public CoopPlayer coopPlayer;
-
-            public GrenadeClass throwWeap;
-
-            public Process<GrenadeController, IHandsThrowController> process;
-
-            public Action confirmCallback;
         }
 
-        private class QuickGrenadeControllerHandler
+        private class QuickGrenadeControllerHandler(CoopPlayer coopPlayer, GrenadeClass throwWeap)
         {
+            private readonly CoopPlayer coopPlayer = coopPlayer;
+            private readonly GrenadeClass throwWeap = throwWeap;
+            public Process<QuickGrenadeThrowController, IGrenadeController> process;
+            public Action confirmCallback;
+
             internal CoopClientQuickGrenadeController ReturnController()
             {
                 return CoopClientQuickGrenadeController.Create(coopPlayer, throwWeap);
@@ -1730,7 +1739,7 @@ namespace Fika.Core.Coop.Players
 
             internal void SendPacket()
             {
-                coopPlayer.PacketSender?.CommonPlayerPackets?.Enqueue(new()
+                coopPlayer.PacketSender.CommonPlayerPackets.Enqueue(new()
                 {
                     HasProceedPacket = true,
                     ProceedPacket = new()
@@ -1749,14 +1758,6 @@ namespace Fika.Core.Coop.Players
                     confirmCallback();
                 }
             }
-
-            public CoopPlayer coopPlayer;
-
-            public GrenadeClass throwWeap;
-
-            public Process<QuickGrenadeThrowController, IGrenadeController> process;
-
-            public Action confirmCallback;
         }
 
     }

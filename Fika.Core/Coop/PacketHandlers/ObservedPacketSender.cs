@@ -1,11 +1,11 @@
 ﻿// © 2024 Lacyway All Rights Reserved
 
 using Comfort.Common;
-using LiteNetLib;
-using LiteNetLib.Utils;
 using Fika.Core.Coop.Matchmaker;
 using Fika.Core.Coop.Players;
 using Fika.Core.Networking;
+using LiteNetLib;
+using LiteNetLib.Utils;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -15,16 +15,17 @@ namespace Fika.Core.Coop.PacketHandlers
     {
         private CoopPlayer player;
         private bool isServer;
+        public bool Enabled { get; set; } = true;
         public FikaServer Server { get; set; }
         public FikaClient Client { get; set; }
         public NetDataWriter Writer { get; set; } = new();
         public Queue<WeaponPacket> FirearmPackets { get; set; } = new(50);
-        public Queue<DamagePacket> HealthPackets { get; set; } = new(50);
+        public Queue<DamagePacket> DamagePackets { get; set; } = new(50);
         public Queue<InventoryPacket> InventoryPackets { get; set; } = new(50);
         public Queue<CommonPlayerPacket> CommonPlayerPackets { get; set; } = new(50);
         public Queue<HealthSyncPacket> HealthSyncPackets { get; set; } = new(50);
 
-        private void Awake()
+        protected void Awake()
         {
             player = GetComponent<ObservedCoopPlayer>();
             isServer = MatchmakerAcceptPatches.IsServer;
@@ -38,22 +39,22 @@ namespace Fika.Core.Coop.PacketHandlers
             }
         }
 
-        private void Update()
+        protected void Update()
         {
             if (player == null || Writer == null)
             {
                 return;
             }
 
-            if (HealthPackets.Count > 0)
+            if (DamagePackets.Count > 0)
             {
                 if (isServer)
                 {
-                    int healthPackets = HealthPackets.Count;
+                    int healthPackets = DamagePackets.Count;
                     for (int i = 0; i < healthPackets; i++)
                     {
-                        DamagePacket healthPacket = HealthPackets.Dequeue();
-                        healthPacket.ProfileId = player.ProfileId;
+                        DamagePacket healthPacket = DamagePackets.Dequeue();
+                        healthPacket.NetId = player.NetId;
 
                         Writer.Reset();
                         Server.SendDataToAll(Writer, ref healthPacket, DeliveryMethod.ReliableOrdered);
@@ -61,11 +62,11 @@ namespace Fika.Core.Coop.PacketHandlers
                 }
                 else
                 {
-                    int healthPackets = HealthPackets.Count;
+                    int healthPackets = DamagePackets.Count;
                     for (int i = 0; i < healthPackets; i++)
                     {
-                        DamagePacket healthPacket = HealthPackets.Dequeue();
-                        healthPacket.ProfileId = player.ProfileId;
+                        DamagePacket healthPacket = DamagePackets.Dequeue();
+                        healthPacket.NetId = player.NetId;
 
                         Writer.Reset();
                         Client.SendData(Writer, ref healthPacket, DeliveryMethod.ReliableOrdered);
@@ -78,7 +79,7 @@ namespace Fika.Core.Coop.PacketHandlers
         {
             Writer = null;
             FirearmPackets.Clear();
-            HealthPackets.Clear();
+            DamagePackets.Clear();
             InventoryPackets.Clear();
             CommonPlayerPackets.Clear();
             HealthSyncPackets.Clear();

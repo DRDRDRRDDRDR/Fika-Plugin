@@ -8,11 +8,11 @@ using EFT.AssetsManager;
 using EFT.GlobalEvents;
 using EFT.InventoryLogic;
 using EFT.Vehicle;
-using HarmonyLib;
-using LiteNetLib.Utils;
 using Fika.Core.Coop.Components;
 using Fika.Core.Coop.Players;
 using Fika.Core.Networking;
+using HarmonyLib;
+using LiteNetLib.Utils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -61,7 +61,7 @@ namespace Fika.Core.Coop.BTR
             Type btrControllerType = typeof(BTRControllerClass);
             _updateTaxiPriceMethod = AccessTools.GetDeclaredMethods(btrControllerType).Single(IsUpdateTaxiPriceMethod);
             client = Singleton<FikaClient>.Instance;
-            btrLogger = new("BTR Client");
+            btrLogger = BepInEx.Logging.Logger.CreateLogSource("BTR Client");
         }
 
         private void Awake()
@@ -122,7 +122,7 @@ namespace Fika.Core.Coop.BTR
                 BTRPacket packet = btrPackets.Dequeue();
                 if (packet.HasBotProfileId)
                 {
-                    AttachBot(packet.BotProfileId);
+                    AttachBot(packet.BotNetId);
                 }
                 if (packet.HasShot)
                 {
@@ -151,11 +151,11 @@ namespace Fika.Core.Coop.BTR
             firearmController.method_54(weaponSoundPlayer, btrMachineGunAmmo, position, direction, false);
         }
 
-        public void AttachBot(string profileId)
+        public void AttachBot(int netId)
         {
             if (CoopHandler.TryGetCoopHandler(out CoopHandler coopHandler))
             {
-                if (coopHandler.Players.TryGetValue(profileId, out CoopPlayer player))
+                if (coopHandler.Players.TryGetValue(netId, out CoopPlayer player))
                 {
                     BTRTurretView turretView = btrClientSide.turret;
 

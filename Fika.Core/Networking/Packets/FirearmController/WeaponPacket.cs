@@ -6,9 +6,9 @@ using static Fika.Core.Networking.FikaSerialization;
 
 namespace Fika.Core.Networking
 {
-    public struct WeaponPacket(string profileId) : INetSerializable
+    public struct WeaponPacket(int netId) : INetSerializable
     {
-        public string ProfileId = profileId;
+        public int NetId = netId;
         public bool HasShotInfo = false;
         public ShotInfoPacket ShotInfoPacket;
         public bool ChangeFireMode = false;
@@ -54,10 +54,12 @@ namespace Fika.Core.Networking
         public bool ReloadBoltAction = false;
         public bool HasRollCylinder = false;
         public bool RollToZeroCamora = false;
+        public bool UnderbarrelSightingRangeUp = false;
+        public bool UnderbarrelSightingRangeDown = false;
 
         public void Deserialize(NetDataReader reader)
         {
-            ProfileId = reader.GetString();
+            NetId = reader.GetInt();
             HasShotInfo = reader.GetBool();
             if (HasShotInfo)
                 ShotInfoPacket = ShotInfoPacket.Deserialize(reader);
@@ -123,11 +125,13 @@ namespace Fika.Core.Networking
             HasRollCylinder = reader.GetBool();
             if (HasRollCylinder)
                 RollToZeroCamora = reader.GetBool();
+            UnderbarrelSightingRangeUp = reader.GetBool();
+            UnderbarrelSightingRangeDown = reader.GetBool();
         }
 
         public void Serialize(NetDataWriter writer)
         {
-            writer.Put(ProfileId);
+            writer.Put(NetId);
             writer.Put(HasShotInfo);
             if (HasShotInfo)
                 ShotInfoPacket.Serialize(writer, ShotInfoPacket);
@@ -189,6 +193,8 @@ namespace Fika.Core.Networking
             writer.Put(HasRollCylinder);
             if (HasRollCylinder)
                 writer.Put(RollToZeroCamora);
+            writer.Put(UnderbarrelSightingRangeUp);
+            writer.Put(UnderbarrelSightingRangeDown);
         }
     }
 }

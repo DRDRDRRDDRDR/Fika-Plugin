@@ -10,8 +10,6 @@ namespace Fika.Core.Coop.ClientClasses
         : PlayerHealthController(healthInfo, player, inventoryController, skillManager, aiHealth)
     {
         private readonly CoopPlayer coopPlayer = (CoopPlayer)player;
-        private readonly bool isBot = aiHealth;
-        private readonly CoopBot coopBot = aiHealth ? (CoopBot)player : null;
         public override bool _sendNetworkSyncPackets
         {
             get
@@ -24,31 +22,14 @@ namespace Fika.Core.Coop.ClientClasses
         {
             if (packet.SyncType == GStruct346.ESyncType.IsAlive && !packet.Data.IsAlive.IsAlive)
             {
-                if (!isBot)
-                {
-                    coopPlayer?.PacketSender?.HealthSyncPackets.Enqueue(coopPlayer.SetupDeathPacket(packet));
-                }
-                else
-                {
-                    coopBot?.PacketSender?.HealthSyncPackets.Enqueue(coopBot.SetupDeathPacket(packet));
-                }
+                coopPlayer.PacketSender.HealthSyncPackets.Enqueue(coopPlayer.SetupDeathPacket(packet));
                 return;
             }
 
-            if (!isBot)
+            coopPlayer.PacketSender.HealthSyncPackets.Enqueue(new(coopPlayer.NetId)
             {
-                coopPlayer?.PacketSender?.HealthSyncPackets.Enqueue(new(coopPlayer.ProfileId)
-                {
-                    Packet = packet
-                });
-            }
-            else
-            {
-                coopBot?.PacketSender?.HealthSyncPackets.Enqueue(new(coopBot.ProfileId)
-                {
-                    Packet = packet
-                });
-            }
+                Packet = packet
+            });
         }
     }
 }

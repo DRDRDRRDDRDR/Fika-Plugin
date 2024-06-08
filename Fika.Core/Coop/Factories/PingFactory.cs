@@ -1,4 +1,8 @@
-﻿using Fika.Core.Bundles;
+﻿using Comfort.Common;
+using EFT;
+using Fika.Core.Bundles;
+using Fika.Core.Coop.Players;
+using Fika.Core.Utils;
 using UnityEngine;
 using UnityEngine.UI;
 using Object = System.Object;
@@ -41,28 +45,36 @@ public static class PingFactory
         protected Vector3 hitPoint;
         private float screenScale = 1f;
         private Color _pingColor = Color.white;
+        private CoopPlayer mainPlayer;
 
         static AbstractPing()
         {
             pingBundle = InternalBundleLoader.Instance.GetAssetBundle("ping");
         }
 
-        private void Awake()
+        protected void Awake()
         {
             image = GetComponentInChildren<Image>();
             image.color = Color.clear;
-            Destroy(gameObject, 3f);
+            mainPlayer = (CoopPlayer)Singleton<GameWorld>.Instance.MainPlayer;
+            if (mainPlayer == null)
+            {
+                Destroy(gameObject);
+                FikaPlugin.Instance.FikaLogger.LogError("Ping::Awake: Could not find MainPlayer!");
+            }
+            Destroy(gameObject, FikaPlugin.PingTime.Value);
         }
 
-        private void Update()
+        protected void Update()
         {
-            if (CameraClass.Instance.OpticCameraManager.Boolean_0 && CameraClass.Instance.OpticCameraManager.CurrentOpticSight != null)
+            if (mainPlayer.HealthController.IsAlive && mainPlayer.ProceduralWeaponAnimation.IsAiming)
             {
-                image.color = Color.clear;
-                return;
+                if (mainPlayer.ProceduralWeaponAnimation.CurrentScope.IsOptic && !FikaPlugin.ShowPingDuringOptics.Value)
+                {
+                    image.color = Color.clear;
+                    return;
+                }
             }
-
-            Camera camera = CameraClass.Instance.Camera;
 
             if (CameraClass.Instance.SSAA != null && CameraClass.Instance.SSAA.isActiveAndEnabled)
             {
@@ -71,10 +83,9 @@ public static class PingFactory
                 screenScale = outputWidth / inputWidth;
             }
 
-            Vector3 screenPoint = camera.WorldToScreenPoint(hitPoint);
-            if (screenPoint.z > 0)
+            if (WorldToScreen.GetScreenPoint(hitPoint, mainPlayer, out Vector3 screenPoint))
             {
-                float distanceToCenter = Vector3.Distance(screenPoint, new Vector3(x: Screen.width, Screen.height, 0) / 2);
+                float distanceToCenter = Vector3.Distance(screenPoint, new Vector3(Screen.width, Screen.height, 0) / 2);
 
                 if (distanceToCenter < 200)
                 {

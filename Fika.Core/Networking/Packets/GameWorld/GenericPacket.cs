@@ -1,8 +1,8 @@
 ﻿// © 2024 Lacyway All Rights Reserved
 
 using EFT;
-using LiteNetLib.Utils;
 using Fika.Core.Coop.Factories;
+using LiteNetLib.Utils;
 using UnityEngine;
 
 namespace Fika.Core.Networking
@@ -13,13 +13,13 @@ namespace Fika.Core.Networking
     /// <param name="packageType"></param>
     public struct GenericPacket(EPackageType packageType) : INetSerializable
     {
-        public string ProfileId;
+        public int NetId;
         public EPackageType PacketType = packageType;
         public Vector3 PingLocation;
         public PingFactory.EPingType PingType;
         public Color PingColor = Color.white;
         public string Nickname;
-        public string BotProfileId;
+        public int BotNetId;
         public long DepartureTime;
         public string ExfilName;
         public float ExfilStartTime;
@@ -27,7 +27,7 @@ namespace Fika.Core.Networking
 
         public void Deserialize(NetDataReader reader)
         {
-            ProfileId = reader.GetString();
+            NetId = reader.GetInt();
             PacketType = (EPackageType)reader.GetInt();
             switch (PacketType)
             {
@@ -36,9 +36,6 @@ namespace Fika.Core.Networking
                     PingType = (PingFactory.EPingType)reader.GetByte();
                     PingColor = reader.GetColor();
                     Nickname = reader.GetString();
-                    break;
-                case EPackageType.LoadBot:
-                    BotProfileId = reader.GetString();
                     break;
                 case EPackageType.TrainSync:
                     DepartureTime = reader.GetLong();
@@ -50,15 +47,18 @@ namespace Fika.Core.Networking
                 case EPackageType.TraderServiceNotification:
                     TraderServiceType = (ETraderServiceType)reader.GetInt();
                     break;
+                case EPackageType.LoadBot:
                 case EPackageType.DisposeBot:
-                    BotProfileId = reader.GetString();
+                case EPackageType.EnableBot:
+                case EPackageType.DisableBot:
+                    BotNetId = reader.GetInt();
                     break;
             }
         }
 
         public void Serialize(NetDataWriter writer)
         {
-            writer.Put(ProfileId);
+            writer.Put(NetId);
             writer.Put((int)PacketType);
             switch (PacketType)
             {
@@ -67,9 +67,6 @@ namespace Fika.Core.Networking
                     writer.Put((byte)PingType);
                     writer.Put(PingColor);
                     writer.Put(Nickname);
-                    break;
-                case EPackageType.LoadBot:
-                    writer.Put(BotProfileId);
                     break;
                 case EPackageType.TrainSync:
                     writer.Put(DepartureTime);
@@ -81,8 +78,11 @@ namespace Fika.Core.Networking
                 case EPackageType.TraderServiceNotification:
                     writer.Put((int)TraderServiceType);
                     break;
+                case EPackageType.LoadBot:
                 case EPackageType.DisposeBot:
-                    writer.Put(BotProfileId);
+                case EPackageType.EnableBot:
+                case EPackageType.DisableBot:
+                    writer.Put(BotNetId);
                     break;
             }
         }
@@ -92,10 +92,13 @@ namespace Fika.Core.Networking
     {
         ClientExtract,
         Ping,
-        LoadBot,
         TrainSync,
         ExfilCountdown,
         TraderServiceNotification,
-        DisposeBot
+        LoadBot,
+        DisposeBot,
+        EnableBot,
+        DisableBot,
+        RemoveAirdropManager
     }
 }
