@@ -19,18 +19,21 @@ jobs:
       DOTNET_NOLOGO: false
       DOTNET_CLI_TELEMETRY_OPTOUT: false
       SolutionName: Fika.Core
-      CSProj: Source/Fika.Core.csproj
+      CSProj: Fika.Core/Fika.Core.csproj
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          fetch-depth: 0
 
       - name: Setup dotnet
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+          
+      - name: Setup MSBuild.exe
+        uses: microsoft/setup-msbuild@v2
 
       # Restore all projects
       - name: dotnet Restore
