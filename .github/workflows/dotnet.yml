@@ -39,15 +39,13 @@ jobs:
       - name: Build
         run: dotnet build --nologo --no-restore --configuration Debug
 
-      # Zip remaining files
       - name: Zip remaining files
         run: |
-          zip -r ${{ env.SolutionName }}-${{ matrix.configuration }}.zip ${{ env.SolutionName }}-${{ matrix.configuration }}
-
-      # Upload artifact with GitHub commit SHA
+          Compress-Archive -Path ${{ env.SolutionName }}-${{ matrix.configuration }} -DestinationPath ${{ env.SolutionName }}-${{ matrix.configuration }}.zip
+      # Upload artifact with github commit SHA
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
           name: ${{ env.SolutionName }}-${{ matrix.configuration }}-${{ github.sha }}
-          path: ${{ env.SolutionName }}-${{ matrix.configuration }}/
+          path: ${{ env.SolutionName }}-${{ matrix.configuration }}\
           if-no-files-found: error
